@@ -1,0 +1,33 @@
+.aecs-box { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.aecs-gauge { text-align: center; padding: 12px 0 8px; border-radius: 6px; margin: 6px 0 14px; }
+.aecs-gauge-num { font-size: 44px; font-weight: 800; letter-spacing: -1px; line-height: 1; }
+.aecs-gauge-num span { font-size: 14px; font-weight: 500; opacity: 0.55; margin-left: 4px; }
+.aecs-gauge-tier { font-size: 11px; letter-spacing: 0.18em; font-weight: 700; margin-top: 6px; }
+.aecs-tier-excellent { background: rgba(29,158,117,0.10); color: #0f6c50; }
+.aecs-tier-good      { background: rgba(29,158,117,0.06); color: #0f6c50; }
+.aecs-tier-fair      { background: rgba(219,166,23,0.10); color: #8b6a0e; }
+.aecs-tier-poor      { background: rgba(214,54,56,0.08);  color: #a12c2e; }
+
+.aecs-signals { margin: 0 0 12px; }
+.aecs-signal { border-top: 1px solid #f0f0f1; padding: 8px 0; }
+.aecs-signal-head { display: flex; justify-content: space-between; align-items: baseline; }
+.aecs-signal-label { font-size: 12px; font-weight: 600; }
+.aecs-signal-num { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; font-weight: 700; }
+.aecs-signal-good .aecs-signal-num { color: #1D9E75; }
+.aecs-signal-fair .aecs-signal-num { color: #dba617; }
+.aecs-signal-poor .aecs-signal-num { color: #d63638; }
+.aecs-signal-detail { font-size: 11px; color: #50575e; margin-top: 2px; line-height: 1.4; }
+
+.aecs-upsell { font-size: 12px; margin: 8px 0 0; }
+.aecs-upsell a { text-decoration: none; }
+
+.aecs-ai-result { margin-top: 14px; padding: 12px; background: #f6f7f7; border-radius: 4px; font-size: 12px; }
+.aecs-ai-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 8px; }
+.aecs-ai-num { font-size: 28px; font-weight: 800; }
+.aecs-ai-label { font-size: 10px; letter-spacing: 0.16em; font-weight: 700; color: #50575e; }
+.aecs-ai-reasoning { margin: 0 0 8px; line-height: 1.5; }
+.aecs-ai-signals { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 10px; }
+.aecs-ai-sig { padding: 6px 8px; background: #fff; border-radius: 3px; font-size: 11px; }
+.aecs-ai-weak h4 { margin: 8px 0 4px; font-size: 12px; }
+.aecs-ai-weak-item { padding: 6px 8px; background: #fff; border-radius: 3px; margin-bottom: 4px; }
+.aecs-ai-weak-item em { color: #50575e; }
