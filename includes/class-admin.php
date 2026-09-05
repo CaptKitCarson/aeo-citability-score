@@ -11,8 +11,6 @@ class AECS_Admin {
 		add_action( 'admin_menu',                array( $this, 'menu' ) );
 		add_action( 'admin_init',                array( $this, 'settings' ) );
 		add_action( 'wp_ajax_aecs_bulk_scan',    array( $this, 'ajax_bulk_scan' ) );
-		add_action( 'wp_ajax_aecs_license_save', array( $this, 'ajax_license_save' ) );
-		add_action( 'wp_ajax_aecs_license_remove',array( $this, 'ajax_license_remove' ) );
 	}
 
 	public function menu() {
@@ -23,13 +21,16 @@ class AECS_Admin {
 		register_setting( 'aecs_settings_group', 'aecs_settings', array(
 			'type' => 'array',
 			'sanitize_callback' => array( $this, 'sanitize' ),
-			'default' => array(
+			/**
+			 * Default settings. Add-ons register their own keys here rather than
+			 * the free plugin carrying settings for features it does not ship.
+			 *
+			 * @param array $defaults Default settings.
+			 */
+			'default' => apply_filters( 'aecs_default_settings', array(
 				'post_types'         => array( 'post' ),
-				'llm_provider'       => 'none',
-				'llm_api_key'        => '',
-				'llm_model'          => '',
 				'auto_score_on_save' => 1,
-			),
+			) ),
 		) );
 	}
 
@@ -40,40 +41,62 @@ class AECS_Admin {
 			if ( in_array( $pt, $avail, true ) ) $types[] = $pt;
 		}
 		if ( empty( $types ) ) $types = array( 'post' );
-		return array(
+		$out = array(
 			'post_types'         => $types,
-			'llm_provider'       => in_array( $in['llm_provider'] ?? 'none', array( 'none', 'openai', 'anthropic', 'gemini' ), true ) ? $in['llm_provider'] : 'none',
-			'llm_api_key'        => trim( sanitize_text_field( $in['llm_api_key'] ?? '' ) ),
-			'llm_model'          => sanitize_text_field( $in['llm_model'] ?? '' ),
 			'auto_score_on_save' => ! empty( $in['auto_score_on_save'] ) ? 1 : 0,
 		);
+
+		/**
+		 * Sanitised settings. Add-ons sanitise and merge their own keys here.
+		 * Without this an add-on's settings would be dropped on every save.
+		 *
+		 * @param array $out Sanitised settings so far.
+		 * @param array $in  Raw submitted settings.
+		 */
+		return apply_filters( 'aecs_sanitize_settings', $out, $in );
 	}
 
 	public function render() {
 		if ( ! current_user_can( 'manage_options' ) ) wp_die( 'Forbidden' );
-		$tab = isset( $_GET['tab'] ) ? sanitize_key( $_GET['tab'] ) : 'dashboard';
-		if ( ! in_array( $tab, array( 'dashboard', 'bulk', 'settings', 'license' ), true ) ) $tab = 'dashboard';
-		$license = new AECS_License();
+		// Read-only view switch on an admin screen already gated by
+		// current_user_can( 'manage_options' ); nothing is written from it.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'dashboard';
+		/**
+		 * Admin tabs. The Pro add-on appends its License tab; the free plugin has
+		 * no licence system and therefore no tab to show.
+		 *
+		 * @param array $tabs Tab slugs.
+		 */
+		$tabs = apply_filters( 'aecs_admin_tabs', array( 'dashboard', 'bulk', 'settings' ) );
+		if ( ! in_array( $tab, $tabs, true ) ) $tab = 'dashboard';
 		?>
 		<div class="wrap">
 			<h1><?php esc_html_e( 'AEO Citability Score', 'aeo-citability-score' ); ?>
-				<?php if ( $license->is_pro() ) : ?>
-					<span style="display:inline-block;margin-left:12px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:0.1em;background:linear-gradient(90deg,#1D9E75,#5DE0B0);color:#06090f;border-radius:3px;vertical-align:middle;">PRO · <?php echo esc_html( ucfirst( (string) $license->tier() ) ); ?></span>
-				<?php endif; ?>
+				<?php do_action( 'aecs_admin_badge' ); ?>
 			</h1>
 			<nav class="nav-tab-wrapper">
 				<?php $this->tab( 'dashboard', __( 'Dashboard', 'aeo-citability-score' ), $tab ); ?>
 				<?php $this->tab( 'bulk',      __( 'Bulk scan', 'aeo-citability-score' ), $tab ); ?>
 				<?php $this->tab( 'settings',  __( 'Settings',  'aeo-citability-score' ), $tab ); ?>
-				<?php $this->tab( 'license',   __( 'License',   'aeo-citability-score' ), $tab ); ?>
+				<?php foreach ( array_diff( $tabs, array( 'dashboard', 'bulk', 'settings' ) ) as $extra ) : ?>
+					<?php $this->tab( $extra, ucfirst( $extra ), $tab ); ?>
+				<?php endforeach; ?>
 			</nav>
 			<div style="margin-top:20px;">
 				<?php
 				switch ( $tab ) {
 					case 'bulk':     $this->render_bulk();     break;
 					case 'settings': $this->render_settings(); break;
-					case 'license':  $this->render_license( $license ); break;
-					default:         $this->render_dashboard(); break;
+					case 'dashboard': $this->render_dashboard(); break;
+					default:
+						/**
+						 * Render a tab supplied by an add-on.
+						 *
+						 * @param string $tab Current tab slug.
+						 */
+						do_action( 'aecs_admin_render_tab', $tab );
+						break;
 				}
 				?>
 			</div>
@@ -226,13 +249,9 @@ class AECS_Admin {
 	private function render_settings() {
 		$s = wp_parse_args( get_option( 'aecs_settings', array() ), array(
 			'post_types'         => array( 'post' ),
-			'llm_provider'       => 'none',
-			'llm_api_key'        => '',
-			'llm_model'          => '',
 			'auto_score_on_save' => 1,
 		) );
 		$public_types = get_post_types( array( 'public' => true ), 'objects' );
-		$is_pro = ( new AECS_License() )->is_pro();
 		?>
 		<form method="post" action="options.php" style="max-width:800px;">
 			<?php settings_fields( 'aecs_settings_group' ); ?>
@@ -245,68 +264,20 @@ class AECS_Admin {
 				<tr><th><?php esc_html_e( 'Auto-score on save', 'aeo-citability-score' ); ?></th><td>
 					<label><input type="checkbox" name="aecs_settings[auto_score_on_save]" value="1" <?php checked( $s['auto_score_on_save'] ); ?>> <?php esc_html_e( 'Structural score recalculated when a post is saved (free tier — no LLM cost)', 'aeo-citability-score' ); ?></label>
 				</td></tr>
-				<tr><td colspan="2"><h3 style="margin:16px 0 4px;">LLM (Pro)</h3><p class="description">BYO API key. Never leaves your server. Free tier can safely ignore.</p></td></tr>
-				<tr><th><label for="aecs_llm_provider">Provider</label></th><td>
-					<select name="aecs_settings[llm_provider]" id="aecs_llm_provider" <?php disabled( ! $is_pro ); ?>>
-						<option value="none"      <?php selected( $s['llm_provider'], 'none' ); ?>>None</option>
-						<option value="openai"    <?php selected( $s['llm_provider'], 'openai' ); ?>>OpenAI</option>
-						<option value="anthropic" <?php selected( $s['llm_provider'], 'anthropic' ); ?>>Anthropic</option>
-						<option value="gemini"    <?php selected( $s['llm_provider'], 'gemini' ); ?>>Google Gemini</option>
-					</select>
-				</td></tr>
-				<tr><th><label for="aecs_llm_api_key">API key</label></th><td>
-					<input type="password" id="aecs_llm_api_key" name="aecs_settings[llm_api_key]" value="<?php echo esc_attr( $s['llm_api_key'] ); ?>" class="regular-text" autocomplete="off" <?php disabled( ! $is_pro ); ?>>
-				</td></tr>
-				<tr><th><label for="aecs_llm_model">Model</label></th><td>
-					<input type="text" id="aecs_llm_model" name="aecs_settings[llm_model]" value="<?php echo esc_attr( $s['llm_model'] ); ?>" class="regular-text" placeholder="gpt-4o-mini · claude-3-5-haiku-latest · gemini-2.0-flash" <?php disabled( ! $is_pro ); ?>>
-				</td></tr>
+				<?php
+				/**
+				 * LLM configuration rows. Supplied by the Pro add-on; the free
+				 * plugin ships no AI functionality and so renders nothing here.
+				 *
+				 * @param array $s Current settings.
+				 */
+				do_action( 'aecs_settings_llm', $s );
+				?>
 			</table>
 			<?php submit_button(); ?>
 		</form>
 		<?php
 	}
-
-	private function render_license( AECS_License $license ) {
-		$state = $license->get_state();
-		$is_pro = $license->is_pro();
-		?>
-		<div class="card" style="max-width:720px;padding:20px 24px;background:#fff;border:1px solid #dcdcde;border-radius:3px;">
-			<?php if ( $is_pro ) : ?>
-				<h2 style="margin-top:0;">Pro is active</h2>
-				<p><strong>Key:</strong> <code><?php echo esc_html( $state['key'] ); ?></code></p>
-				<p><strong>Tier:</strong> <?php echo esc_html( ucfirst( (string) $state['tier'] ) ); ?> · <strong>Sites:</strong> <?php echo esc_html( count( (array) $state['activated_sites'] ) . ' / ' . (int) $state['max_sites'] ); ?></p>
-				<p><button type="button" class="button button-secondary" id="aecs-license-remove">Deactivate this site</button></p>
-			<?php else : ?>
-				<h2 style="margin-top:0;">Activate Pro</h2>
-				<p>Pro unlocks: BYO-LLM rubric scoring, inline rewrites, historical trend, bulk analysis, CSV export.</p>
-				<?php if ( ! empty( $state['message'] ) && 'inactive' !== $state['status'] ) : ?><div class="notice notice-error inline"><p><?php echo esc_html( $state['message'] ); ?></p></div><?php endif; ?>
-				<p><label for="aecs-license-key"><strong>License key</strong></label><br><input type="text" id="aecs-license-key" class="regular-text" placeholder="AECS-XXXX-XXXX-XXXX-XXXX" autocomplete="off"></p>
-				<p><button type="button" class="button button-primary" id="aecs-license-activate">Activate</button> <a href="https://kitmobley.com/plugins/<?php echo esc_attr( AECS_SLUG ); ?>/#pricing" target="_blank" rel="noopener" class="button button-secondary">Get a license →</a></p>
-			<?php endif; ?>
-		</div>
-		<script>
-		(function(){
-			var nonce = <?php echo wp_json_encode( wp_create_nonce( 'aecs_license' ) ); ?>;
-			var ajax = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;
-			document.addEventListener('click', function(e){
-				if (e.target && e.target.id === 'aecs-license-activate') {
-					var key = document.getElementById('aecs-license-key').value; if (!key) return;
-					e.target.disabled = true; e.target.textContent = 'Activating…';
-					fetch(ajax, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({action:'aecs_license_save', nonce:nonce, license_key:key}) })
-						.then(r=>r.json()).then(r=>{ if (r&&r.success) location.reload(); else { e.target.disabled=false; e.target.textContent='Activate'; alert((r&&r.data&&r.data.message)||'Activation failed'); } })
-						.catch(()=>{ e.target.disabled=false; e.target.textContent='Activate'; alert('Network error'); });
-				}
-				if (e.target && e.target.id === 'aecs-license-remove') {
-					if (!confirm('Deactivate this site?')) return;
-					fetch(ajax, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: new URLSearchParams({action:'aecs_license_remove', nonce:nonce}) }).finally(()=>location.reload());
-				}
-			});
-		})();
-		</script>
-		<?php
-	}
-
-	// ── AJAX ────────────────────────────────────────────────────
 
 	public function ajax_bulk_scan() {
 		check_ajax_referer( 'aecs_admin', 'nonce' );
@@ -339,24 +310,4 @@ class AECS_Admin {
 		wp_send_json_success( array( 'processed' => count( $ids ), 'avg_score' => $avg, 'items' => $items ) );
 	}
 
-	public function ajax_license_save() {
-		check_ajax_referer( 'aecs_license', 'nonce' );
-		if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( array( 'message' => 'Forbidden' ), 403 );
-		$key = isset( $_POST['license_key'] ) ? sanitize_text_field( wp_unslash( $_POST['license_key'] ) ) : '';
-		if ( ! $key ) wp_send_json_error( array( 'message' => 'License key required' ), 400 );
-		$state = ( new AECS_License() )->activate( $key );
-		if ( 'active' === $state['status'] ) {
-			( new AECS_Updater() )->bust_cache();
-			wp_send_json_success( array( 'state' => $state, 'message' => 'Activated' ) );
-		}
-		wp_send_json_error( array( 'state' => $state, 'message' => $state['message'] ?? 'Activation failed' ), 200 );
-	}
-
-	public function ajax_license_remove() {
-		check_ajax_referer( 'aecs_license', 'nonce' );
-		if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( array( 'message' => 'Forbidden' ), 403 );
-		( new AECS_License() )->deactivate();
-		( new AECS_Updater() )->bust_cache();
-		wp_send_json_success( array( 'message' => 'Deactivated' ) );
-	}
 }

@@ -1,9 +1,12 @@
 <?php
 /**
- * Per-post editor meta box — score gauge, signal breakdown, AI analysis button.
+ * Editor metabox: the citability score, its signals, and a re-score control.
  *
- * Works in both Classic Editor and Gutenberg's post-editor sidebar
- * (via the sidebar-metabox compatibility layer).
+ * Everything in this file is free and ungated. AI analysis and rewriting live
+ * in the separate Pro add-on, which hooks `aecs_editor_actions` to add its own
+ * control and `aecs_editor_scripts` to add its own behaviour. That separation
+ * is deliberate: the WordPress.org build ships this file and no AI code at all,
+ * rather than shipping AI code behind a licence check.
  */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
@@ -11,23 +14,21 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 class AECS_Editor {
 
 	public function __construct() {
-		add_action( 'add_meta_boxes',              array( $this, 'register' ) );
-		add_action( 'admin_enqueue_scripts',       array( $this, 'assets' ) );
-		add_action( 'wp_ajax_aecs_score_post',     array( $this, 'ajax_score' ) );
-		add_action( 'wp_ajax_aecs_ai_analyze',     array( $this, 'ajax_ai_analyze' ) );
-		add_action( 'wp_ajax_aecs_ai_rewrite',     array( $this, 'ajax_ai_rewrite' ) );
+		add_action( 'add_meta_boxes',          array( $this, 'register' ) );
+		add_action( 'admin_enqueue_scripts',   array( $this, 'assets' ) );
+		add_action( 'wp_ajax_aecs_score_post', array( $this, 'ajax_score' ) );
 	}
 
 	public function register() {
-		$settings = get_option( 'aecs_settings', array() );
-		$types = (array) ( $settings['post_types'] ?? array( 'post' ) );
-		foreach ( $types as $pt ) {
+		$s   = get_option( 'aecs_settings', array() );
+		$pts = ! empty( $s['post_types'] ) && is_array( $s['post_types'] ) ? $s['post_types'] : array( 'post', 'page' );
+		foreach ( $pts as $pt ) {
 			add_meta_box( 'aecs_score_box', __( 'AEO Citability Score', 'aeo-citability-score' ), array( $this, 'render_box' ), $pt, 'side', 'high' );
 		}
 	}
 
 	public function assets( $hook ) {
-		if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) && strpos( (string) $hook, 'aeo-citability-score' ) === false ) return;
+		if ( ! in_array( $hook, array( 'post.php', 'post-new.php' ), true ) ) return;
 		wp_enqueue_style( 'aecs-editor', AECS_URL . 'assets/editor.css', array(), AECS_VERSION );
 	}
 
@@ -36,9 +37,6 @@ class AECS_Editor {
 		if ( ! is_array( $score_data ) ) {
 			$score_data = ( new AECS_Scorer() )->score_post( $post->ID );
 		}
-		$is_pro = ( new AECS_License() )->is_pro();
-		$s = get_option( 'aecs_settings', array() );
-		$llm_configured = $is_pro && ! empty( $s['llm_provider'] ) && 'none' !== $s['llm_provider'] && ! empty( $s['llm_api_key'] );
 
 		$score = (int) ( $score_data['score'] ?? 0 );
 		$tier  = (string) ( $score_data['tier'] ?? 'poor' );
@@ -52,7 +50,7 @@ class AECS_Editor {
 
 			<div class="aecs-signals">
 				<?php if ( ! empty( $score_data['signals'] ) ) : foreach ( $score_data['signals'] as $sig ) : ?>
-					<div class="aecs-signal aecs-signal-<?php echo $this->band_class( $sig['score'] ); ?>">
+					<div class="aecs-signal aecs-signal-<?php echo esc_attr( $this->band_class( $sig['score'] ) ); ?>">
 						<div class="aecs-signal-head">
 							<span class="aecs-signal-label"><?php echo esc_html( $sig['label'] ); ?></span>
 							<span class="aecs-signal-num"><?php echo (int) $sig['score']; ?></span>
@@ -66,18 +64,26 @@ class AECS_Editor {
 				<button type="button" class="button" data-aecs-action="rescore" data-nonce="<?php echo esc_attr( $nonce ); ?>">
 					<?php esc_html_e( 'Re-score', 'aeo-citability-score' ); ?>
 				</button>
-				<button type="button" class="button button-primary" data-aecs-action="ai" data-nonce="<?php echo esc_attr( $nonce ); ?>" <?php disabled( ! $llm_configured ); ?>>
-					<?php echo $is_pro ? esc_html__( 'Run AI analysis', 'aeo-citability-score' ) : esc_html__( 'AI analysis (Pro)', 'aeo-citability-score' ); ?>
-				</button>
+				<?php
+				/**
+				 * Extra controls for this metabox. The Pro add-on renders its AI
+				 * analysis button here. Nothing hooks this in the free plugin.
+				 *
+				 * @param WP_Post $post  The post being edited.
+				 * @param string  $nonce Nonce for the aecs_editor action.
+				 */
+				do_action( 'aecs_editor_actions', $post, $nonce );
+				?>
 			</p>
-
-			<?php if ( ! $is_pro ) : ?>
-				<p class="aecs-upsell"><a href="https://kitmobley.com/plugins/<?php echo esc_attr( AECS_SLUG ); ?>/#pricing" target="_blank" rel="noopener"><?php esc_html_e( 'Unlock AI rubric + rewrites →', 'aeo-citability-score' ); ?></a></p>
-			<?php elseif ( ! $llm_configured ) : ?>
-				<p class="aecs-upsell"><a href="<?php echo esc_url( admin_url( 'admin.php?page=aeo-citability-score&tab=settings' ) ); ?>"><?php esc_html_e( 'Configure your LLM API key →', 'aeo-citability-score' ); ?></a></p>
-			<?php endif; ?>
-
-			<div class="aecs-ai-result" style="display:none;"></div>
+			<?php
+			/**
+			 * Block-level additions below the buttons. The Pro add-on renders its
+			 * upsell notice and AI result container here.
+			 *
+			 * @param WP_Post $post The post being edited.
+			 */
+			do_action( 'aecs_editor_after', $post );
+			?>
 		</div>
 
 		<script>
@@ -87,51 +93,34 @@ class AECS_Editor {
 			if (!box) return;
 			var postId = box.getAttribute('data-post-id');
 			box.addEventListener('click', function(e){
-				var b = e.target.closest('[data-aecs-action]');
+				var b = e.target.closest('[data-aecs-action="rescore"]');
 				if (!b) return;
-				var action = b.getAttribute('data-aecs-action');
-				var nonce  = b.getAttribute('data-nonce');
+				var nonce = b.getAttribute('data-nonce');
 				b.disabled = true;
 				var origText = b.textContent; b.textContent = 'Working…';
-				var body = new URLSearchParams({ action: 'rescore' === action ? 'aecs_score_post' : 'aecs_ai_analyze', nonce: nonce, post_id: postId });
-				fetch(ajax, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body: body })
+				fetch(ajax, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+					body: new URLSearchParams({ action: 'aecs_score_post', nonce: nonce, post_id: postId })
+				})
 					.then(function(r){ return r.json(); })
 					.then(function(r){
 						b.disabled = false; b.textContent = origText;
-						if (!r || !r.success) { alert((r&&r.data&&r.data.message)||'Failed'); return; }
-						if ('rescore' === action) { window.location.reload(); return; }
-						var wrap = box.querySelector('.aecs-ai-result');
-						if (wrap) {
-							wrap.style.display = 'block';
-							wrap.innerHTML = renderAI(r.data);
-						}
+						if (!r || !r.success) { alert((r && r.data && r.data.message) || 'Failed'); return; }
+						window.location.reload();
 					})
 					.catch(function(){ b.disabled = false; b.textContent = origText; alert('Network error'); });
 			});
-			function renderAI(d){
-				var html = '<div class="aecs-ai-head"><span class="aecs-ai-num">' + (d.score||0) + '</span><span class="aecs-ai-label">AI RUBRIC</span></div>';
-				if (d.reasoning) html += '<p class="aecs-ai-reasoning">' + escapeHtml(d.reasoning) + '</p>';
-				if (d.signals) {
-					html += '<div class="aecs-ai-signals">';
-					Object.keys(d.signals).forEach(function(k){
-						var s = d.signals[k];
-						html += '<div class="aecs-ai-sig"><strong>' + escapeHtml(k) + ': ' + (s.score||0) + '</strong><br><small>' + escapeHtml(s.note||'') + '</small></div>';
-					});
-					html += '</div>';
-				}
-				if (d.weak_passages && d.weak_passages.length) {
-					html += '<div class="aecs-ai-weak"><h4>Weak passages</h4>';
-					d.weak_passages.forEach(function(w){
-						html += '<div class="aecs-ai-weak-item"><em>' + escapeHtml(w.snippet||'') + '</em><br>' + escapeHtml(w.why||'') + '<br><small>Suggestion: ' + escapeHtml(w.suggestion||'') + '</small></div>';
-					});
-					html += '</div>';
-				}
-				return html;
-			}
-			function escapeHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;'); }
 		})();
 		</script>
 		<?php
+		/**
+		 * Extra scripts for this metabox. The Pro add-on prints its AI handling
+		 * here so the free build carries no AI JavaScript.
+		 *
+		 * @param WP_Post $post The post being edited.
+		 */
+		do_action( 'aecs_editor_scripts', $post );
 	}
 
 	private function band_class( $score ) {
@@ -150,31 +139,5 @@ class AECS_Editor {
 		$data = ( new AECS_Scorer() )->score_post( $post_id );
 		update_post_meta( $post_id, AECS_META_SCORE, $data );
 		wp_send_json_success( $data );
-	}
-
-	public function ajax_ai_analyze() {
-		check_ajax_referer( 'aecs_editor', 'nonce' );
-		if ( ! current_user_can( 'edit_posts' ) ) wp_send_json_error( array( 'message' => 'Forbidden' ), 403 );
-		if ( ! ( new AECS_License() )->is_pro() ) wp_send_json_error( array( 'message' => 'Pro required' ), 402 );
-		$post_id = isset( $_POST['post_id'] ) ? (int) $_POST['post_id'] : 0;
-		$post = $post_id ? get_post( $post_id ) : null;
-		if ( ! $post ) wp_send_json_error( array( 'message' => 'Bad post' ), 400 );
-		$body = wp_strip_all_tags( $post->post_content );
-		$res = ( new AECS_LLM() )->score_content( $post->post_title, $body );
-		if ( empty( $res['ok'] ) ) wp_send_json_error( array( 'message' => $res['error'] ?? 'AI failed' ), 200 );
-		update_post_meta( $post_id, AECS_META_ANALYSIS, $res['data'] );
-		wp_send_json_success( $res['data'] );
-	}
-
-	public function ajax_ai_rewrite() {
-		check_ajax_referer( 'aecs_editor', 'nonce' );
-		if ( ! current_user_can( 'edit_posts' ) ) wp_send_json_error( array( 'message' => 'Forbidden' ), 403 );
-		if ( ! ( new AECS_License() )->is_pro() ) wp_send_json_error( array( 'message' => 'Pro required' ), 402 );
-		$original = isset( $_POST['original'] ) ? wp_unslash( $_POST['original'] ) : '';
-		$context  = isset( $_POST['context'] )  ? sanitize_text_field( wp_unslash( $_POST['context'] ) ) : '';
-		if ( empty( $original ) ) wp_send_json_error( array( 'message' => 'No original text' ), 400 );
-		$res = ( new AECS_LLM() )->rewrite_paragraph( $original, $context );
-		if ( empty( $res['ok'] ) ) wp_send_json_error( array( 'message' => $res['error'] ?? 'AI failed' ), 200 );
-		wp_send_json_success( array( 'rewrite' => $res['data'] ) );
 	}
 }

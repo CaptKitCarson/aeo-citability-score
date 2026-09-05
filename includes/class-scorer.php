@@ -160,7 +160,10 @@ class AECS_Scorer {
 
 	private function signal_source_attribution( $raw ) {
 		$stripped = wp_strip_all_tags( $raw, true );
-		preg_match_all( '#href=[\'"](https?://[^\'"#]+)[\'"]#i', $raw, $m );
+		// Delimiter is ~ deliberately: with # as the delimiter the unescaped #
+		// inside the character class ends the pattern early, so this match always
+		// failed and every post scored zero for source attribution.
+		preg_match_all( '~href=[\'"](https?://[^\'"#]+)[\'"]~i', $raw, $m );
 		$urls = $m[1] ?? array();
 		if ( empty( $urls ) ) return $this->sub( 0, 'Source attribution', 'No external links found.' );
 		$site_host = wp_parse_url( home_url( '/' ), PHP_URL_HOST );
